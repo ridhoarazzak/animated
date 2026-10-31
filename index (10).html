@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rute Wisata Solok Selatan 3D</title>
+<link href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<style>
+html,body{margin:0;height:100%;background:#111;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+#map{position:absolute;inset:0}
+.card{position:absolute;left:12px;top:calc(12px + env(safe-area-inset-top));width:calc(100% - 24px);max-width:420px;box-sizing:border-box;background:rgba(18,22,26,.8);color:#fff;border-radius:12px;padding:12px 14px;pointer-events:none}
+.card small{opacity:.75;font-size:12px}
+.card h1{font-size:18px;margin:2px 0 4px;font-weight:600}
+.card p{font-size:14px;line-height:1.5;margin:0}
+.bar{height:4px;background:rgba(255,255,255,.2);border-radius:2px;margin-top:10px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:#ff7043}
+.ctl{position:absolute;left:12px;bottom:calc(14px + env(safe-area-inset-bottom));display:flex;gap:8px;flex-wrap:wrap}
+button{font:600 14px system-ui,sans-serif;padding:10px 16px;border:0;border-radius:10px;background:#ff7043;color:#fff}
+button.alt{background:rgba(18,22,26,.85)}
+button:disabled{opacity:.5}
+.pin{width:26px;height:26px;border-radius:50%;background:#ff7043;color:#fff;border:2px solid #fff;display:grid;place-items:center;font:700 13px system-ui,sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.5)}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="card">
+  <small id="urut">Rute Wisata Solok Selatan</small>
+  <h1 id="nama">Dari Padang Aro ke Saribu Rumah Gadang</h1>
+  <p id="isi">Memuat peta... lalu tekan Putar untuk terbang menyusuri rute di atas pegunungan Solok Selatan.</p>
+  <div class="bar"><i id="prog"></i></div>
+</div>
+<div class="ctl">
+  <button id="bPlay" disabled>Putar</button>
+  <button id="bUlang" class="alt" disabled>Dari awal</button>
+  <button id="bRekam" class="alt" disabled>Rekam video</button>
+  <button id="bUnduh" class="alt" disabled>Unduh video</button>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script>
+var STOPS = [
+  {n:'Taman Kota Padang Aro', ll:[101.2514,-1.5493], t:'Titik awal perjalanan di pusat kota.'},
+  {n:'Kebun Teh Liki', ll:[101.2268,-1.5645], t:'Kebun teh peninggalan zaman Belanda. Ada kafe untuk bersantai.'},
+  {n:'Puncak Pinang Awan', ll:[101.1214,-1.5845], t:'Tempat melihat pemandangan, paling bagus pagi atau sore.'},
+  {n:'Muara Labuh', ll:[101.0586,-1.5122], t:'Pusat Kecamatan Sungai Pagu. Cocok untuk istirahat dan makan.'},
+  {n:'Puncak Langik Garden', ll:[101.0541,-1.4714], t:'Tempat makan dengan pemandangan. Jalan naik hanya bisa dilewati motor.'},
+  {n:'Saribu Rumah Gadang', ll:[101.0601,-1.4815], t:'Kawasan rumah gadang. Naik menaranya untuk melihat seluruh kawasan. Tutup hari Jumat.'}
+];
+var SPEED = 1400;   // meter per detik (kecepatan terbang)
+var PAUSE = 3500;   // jeda di tiap tempat (milidetik)
+var PITCH = 66, ZOOM_JALAN = 12.4, ZOOM_TEMPAT = 13.4;
+
+function chaikin(pts, n){
+  for (var k=0;k<n;k++){
+    var out=[pts[0]];
+    for (var i=0;i<pts.length-1;i++){
+      var a=pts[i], b=pts[i+1];
+      out.push([.75*a[0]+.25*b[0], .75*a[1]+.25*b[1]], [.25*a[0]+.75*b[0], .25*a[1]+.75*b[1]]);
+    }
+    out.push(pts[pts.length-1]); pts=out;
+  }
+  return pts;
+}
+function dxy(a,b){var k=Math.PI/180;return [(b[0]-a[0])*111320*Math.cos(a[1]*k),(b[1]-a[1])*110574];}
+function len(a,b){var d=dxy(a,b);return Math.hypot(d[0],d[1]);}
+function brg(a,b){var d=dxy(a,b);return (Math.atan2(d[0],d[1])*180/Math.PI+360)%360;}
+function adiff(a,b){return ((b-a+540)%360)-180;}
+
+var path = chaikin(STOPS.map(function(s){return s.ll;}), 3);
+var cum=[0];
+for (var i=1;i<path.length;i++) cum.push(cum[i-1]+len(path[i-1],path[i]));
+var TOTAL = cum[cum.length-1];
+function at(d){
+  d=Math.max(0,Math.min(TOTAL,d));
+  var i=1; while(i<cum.length-1 && cum[i]<d) i++;
+  var t=(d-cum[i-1])/((cum[i]-cum[i-1])||1), a=path[i-1], b=path[i];
+  return [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t];
+}
+function upto(d){
+  var out=[]; for (var i=0;i<path.length && cum[i]<d;i++) out.push(path[i]);
+  out.push(at(d)); return out;
+}
+var stopD = STOPS.map(function(s){
+  var bi=0,bd=1e12;
+  path.forEach(function(p,i){var x=len(p,s.ll); if(x<bd){bd=x;bi=i;}});
+  return cum[bi];
+});
+
+if (typeof maplibregl === 'undefined') {
+  document.getElementById('isi').textContent = 'Peta gagal dimuat. Buka file ini di Chrome atau Safari dengan internet aktif, atau unggah ke GitHub Pages. Pratinjau di dalam aplikasi chat tidak menjalankan peta.';
+  throw new Error('maplibre tidak termuat');
+}
+var map = new maplibregl.Map({
+  container:'map',
+  style:{version:8,sources:{sat:{type:'raster',tileSize:256,maxzoom:19,
+    tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+    attribution:'Imagery: Esri, Maxar, Earthstar Geographics'}},
+    layers:[{id:'sat',type:'raster',source:'sat'}]},
+  center:STOPS[0].ll, zoom:ZOOM_JALAN, pitch:PITCH, bearing:300, maxPitch:80,
+  preserveDrawingBuffer:true, attributionControl:{compact:true}
+});
+
+map.on('error', function(e){ console.warn(e && e.error); });
+var dist=0, next=0, playing=false, pauseUntil=0, last=0, finished=false;
+var bearing=brg(at(0), at(1800)), zoom=ZOOM_JALAN;
+var el = function(id){return document.getElementById(id);};
+
+function empty(){return {type:'FeatureCollection',features:[]};}
+function line(c){return {type:'Feature',geometry:{type:'LineString',coordinates:c}};}
+function pt(c){return {type:'Feature',geometry:{type:'Point',coordinates:c}};}
+
+map.once('style.load', function(){
+  map.addSource('dem',{type:'raster-dem',tiles:['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],encoding:'terrarium',tileSize:256,maxzoom:14,attribution:'Elevation: Mapzen / AWS Terrain Tiles'});
+  map.setTerrain({source:'dem',exaggeration:1.5});
+
+  map.addSource('rute',{type:'geojson',data:line(path)});
+  map.addLayer({id:'rute',type:'line',source:'rute',paint:{'line-color':'#ffffff','line-width':2,'line-opacity':.6,'line-dasharray':[2,2]}});
+  map.addSource('jalur',{type:'geojson',data:line([path[0],path[1]])});
+  map.addLayer({id:'jalur',type:'line',source:'jalur',layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':'#ff7043','line-width':5}});
+  map.addSource('posisi',{type:'geojson',data:pt(path[0])});
+  map.addLayer({id:'posisi',type:'circle',source:'posisi',paint:{'circle-radius':8,'circle-color':'#ff7043','circle-stroke-color':'#fff','circle-stroke-width':3}});
+
+  fetch('desa_solsel.geojson').then(function(r){return r.ok?r.json():null;}).then(function(g){
+    if(!g) return;
+    map.addSource('desa',{type:'geojson',data:g});
+    map.addLayer({id:'desa',type:'line',source:'desa',paint:{'line-color':'#ffffff','line-width':1,'line-opacity':.7}},'rute');
+  }).catch(function(){});
+
+  STOPS.forEach(function(s,i){
+    var d=document.createElement('div'); d.className='pin'; d.textContent=i+1;
+    new maplibregl.Marker({element:d}).setLngLat(s.ll).addTo(map);
+  });
+  ['bPlay','bUlang','bRekam'].forEach(function(id){el(id).disabled=false;});
+  el('isi').textContent='Tekan Putar untuk terbang menyusuri rute di atas pegunungan Solok Selatan.';
+});
+
+function tampilTempat(i){
+  el('urut').textContent='Tempat '+(i+1)+' dari '+STOPS.length;
+  el('nama').textContent=STOPS[i].n;
+  el('isi').textContent=STOPS[i].t;
+}
+
+function frame(ts){
+  if(!playing){last=0;return;}
+  var dt = last ? Math.min((ts-last)/1000,.1) : 0; last=ts;
+  if(ts<pauseUntil){
+    bearing=(bearing+7*dt)%360;
+    zoom+=(ZOOM_TEMPAT-zoom)*Math.min(1,dt*2);
+  } else {
+    if(next>=STOPS.length){ selesai(); return; }
+    if(dist>=stopD[next]-1){
+      tampilTempat(next); next++; pauseUntil=ts+PAUSE;
+    } else {
+      dist=Math.min(TOTAL,dist+SPEED*dt);
+      var tb=brg(at(dist), at(Math.min(TOTAL,dist+1800)));
+      bearing=(bearing+adiff(bearing,tb)*Math.min(1,dt*1.5)+360)%360;
+      zoom+=(ZOOM_JALAN-zoom)*Math.min(1,dt*1.5);
+    }
+  }
+  if(!map.getSource('jalur')||!map.getSource('posisi')){requestAnimationFrame(frame);return;}
+  var p=at(dist);
+  map.jumpTo({center:p,zoom:zoom,bearing:bearing,pitch:PITCH});
+  map.getSource('jalur').setData(line(upto(dist).length>1?upto(dist):[path[0],path[1]]));
+  map.getSource('posisi').setData(pt(p));
+  el('prog').style.width=(dist/TOTAL*100)+'%';
+  requestAnimationFrame(frame);
+}
+
+function selesai(){
+  playing=false; finished=true;
+  el('bPlay').textContent='Putar lagi';
+  el('urut').textContent='Selesai';
+  if(rec) stopRec();
+}
+function reset(){
+  dist=0; next=0; pauseUntil=0; finished=false; last=0;
+  bearing=brg(at(0),at(1800)); zoom=ZOOM_JALAN;
+  el('prog').style.width='0%';
+}
+function play(){
+  if(finished) reset();
+  playing=true; el('bPlay').textContent='Jeda';
+  requestAnimationFrame(frame);
+}
+function jeda(){playing=false; el('bPlay').textContent='Lanjut';}
+
+el('bPlay').onclick=function(){playing?jeda():play();};
+el('bUlang').onclick=function(){playing=false; reset(); setTimeout(play,60);};
+
+var rec=null, chunks=[], videoBlob=null, videoExt='webm', recMime='';
+function startRec(){
+  if(typeof MediaRecorder==='undefined'){alert('Peramban ini belum mendukung perekaman. Coba Chrome di komputer.');return false;}
+  var st=map.getCanvas().captureStream(30);
+  recMime=['video/mp4;codecs=avc1','video/webm;codecs=vp9','video/webm'].filter(function(t){return MediaRecorder.isTypeSupported(t);})[0];
+  if(!recMime){alert('Format video tidak didukung peramban ini.');return false;}
+  videoExt = recMime.indexOf('mp4')===0 ? 'mp4' : 'webm';
+  rec=new MediaRecorder(st,{mimeType:recMime,videoBitsPerSecond:8000000});
+  chunks=[]; videoBlob=null; el('bUnduh').disabled=true;
+  rec.ondataavailable=function(e){if(e.data.size)chunks.push(e.data);};
+  rec.onstop=function(){
+    videoBlob=new Blob(chunks,{type:recMime.split(';')[0]});
+    el('bUnduh').disabled=false;
+    el('isi').textContent='Rekaman selesai. Tekan Unduh video untuk menyimpannya.';
+  };
+  rec.start(); el('bRekam').textContent='Berhenti rekam';
+  return true;
+}
+function stopRec(){
+  if(rec&&rec.state!=='inactive') rec.stop();
+  rec=null; el('bRekam').textContent='Rekam video';
+}
+el('bRekam').onclick=function(){
+  if(rec){stopRec();return;}
+  playing=false; reset();
+  if(startRec()) setTimeout(play,300);
+};
+el('bUnduh').onclick=function(){
+  if(!videoBlob) return;
+  var a=document.createElement('a');
+  a.href=URL.createObjectURL(videoBlob);
+  a.download='rute_solsel_3d.'+videoExt;
+  document.body.appendChild(a); a.click(); a.remove();
+};
+</script>
+</body>
+</html>
